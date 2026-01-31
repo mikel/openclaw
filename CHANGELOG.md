@@ -7,6 +7,7 @@ Status: stable.
 
 ### Fixed
 - Fixed reasoning models that don't support the `reasoning_effort` parameter (like XAI's `grok-4-1-fast-reasoning`) by respecting the `supportsReasoningEffort` compat flag in model configurations
+- Fixed cron tool validation error with xAI models by adding early validation, helpful error messages, and enhanced tool description with explicit examples
 
 ### Changes
 - Rebrand: rename the npm package/CLI to `openclaw`, add a `openclaw` compatibility shim, and move extensions to the `@openclaw/*` scope.

@@ -231,4 +231,67 @@ describe("cron tool", () => {
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
   });
+
+  it("returns validation error when job is missing required fields", async () => {
+    const tool = createCronTool();
+    const result = await tool.execute("call7", {
+      action: "add",
+      job: {},
+    });
+
+    // Should not call gateway
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    // Should return error result
+    expect(result).toContain("error");
+    expect(result).toContain("Missing required fields");
+    expect(result).toContain("name");
+    expect(result).toContain("schedule");
+    expect(result).toContain("sessionTarget");
+    expect(result).toContain("payload");
+  });
+
+  it("returns validation error when job is missing some required fields", async () => {
+    const tool = createCronTool();
+    const result = await tool.execute("call8", {
+      action: "add",
+      job: {
+        name: "test",
+        // missing schedule, sessionTarget, payload
+      },
+    });
+
+    // Should not call gateway
+    expect(callGatewayMock).not.toHaveBeenCalled();
+
+    // Should return error result
+    expect(result).toContain("error");
+    expect(result).toContain("Missing required fields");
+    expect(result).toContain("schedule");
+    expect(result).toContain("sessionTarget");
+    expect(result).toContain("payload");
+    expect(result).not.toContain("name"); // name is present
+  });
+
+  it("proceeds when all required fields are present", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call9", {
+      action: "add",
+      job: {
+        name: "test",
+        schedule: { kind: "at", atMs: 123 },
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    // Should call gateway
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+    };
+    expect(call.method).toBe("cron.add");
+  });
 });

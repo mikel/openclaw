@@ -1,12 +1,15 @@
 import { Type } from "@sinclair/typebox";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { loadConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
+
+const log = createSubsystemLogger("agents/cron-tool");
 
 // NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
 // instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
@@ -145,13 +148,26 @@ ACTIONS:
 - runs: Get job run history (requires jobId)
 - wake: Send wake event (requires text, optional mode)
 
-JOB SCHEMA (for add action):
+CRITICAL: When using action "add", the job parameter MUST be a complete object with ALL required nested fields. Do not pass an empty object or omit required fields.
+
+COMPLETE EXAMPLE FOR ACTION "add":
 {
-  "name": "string (optional)",
-  "schedule": { ... },      // Required: when to run
-  "payload": { ... },       // Required: what to execute
-  "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
+  "action": "add",
+  "job": {
+    "name": "morning-reminder",
+    "schedule": { "kind": "at", "atMs": 1738300800000 },
+    "sessionTarget": "main",
+    "payload": { "kind": "systemEvent", "text": "Good morning! Time to start the day." }
+  }
+}
+
+JOB SCHEMA (for add action) - ALL FIELDS REQUIRED UNLESS MARKED OPTIONAL:
+{
+  "name": "string",         // REQUIRED: Job identifier
+  "schedule": { ... },      // REQUIRED: When to run (see SCHEDULE TYPES below)
+  "sessionTarget": "main" | "isolated",  // REQUIRED: Where to execute
+  "payload": { ... },       // REQUIRED: What to execute (see PAYLOAD TYPES below)
+  "enabled": true | false   // OPTIONAL: Default true
 }
 
 SCHEDULE TYPES (schedule.kind):
@@ -200,7 +216,37 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+
+          // Debug logging to capture what xAI sends
+          log.debug("cron add received params", {
+            action,
+            hasJob: !!params.job,
+            jobKeys: params.job ? Object.keys(params.job) : [],
+            rawJob: params.job,
+          });
+
           const job = normalizeCronJobCreate(params.job) ?? params.job;
+
+          // Early validation: check required fields before calling gateway
+          const requiredFields = ["name", "schedule", "sessionTarget", "payload"] as const;
+          const missingFields = requiredFields.filter(
+            (f) => !(f in job) || job[f] === undefined || job[f] === null,
+          );
+
+          if (missingFields.length > 0) {
+            log.warn("cron add validation failed", {
+              missingFields,
+              receivedJobKeys: Object.keys(job),
+            });
+            return jsonResult({
+              status: "error",
+              error: `Missing required fields in job object: ${missingFields.join(", ")}`,
+              hint: 'The job parameter must contain a complete job specification. Example: { "name": "reminder", "schedule": { "kind": "at", "atMs": 1738300800000 }, "sessionTarget": "main", "payload": { "kind": "systemEvent", "text": "reminder text" } }',
+              missingFields,
+              receivedJobKeys: Object.keys(job),
+            });
+          }
+
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
             const agentId = opts?.agentSessionKey
